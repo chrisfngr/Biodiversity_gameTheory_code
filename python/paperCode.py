@@ -12,18 +12,19 @@ EPSILON = 1E-3
 # This is just to speed things up; we will always return to the ecoregion
 NIGNOREITER = 10    
 #计算roi和周期相关参数的help function，主要是为从新分配budgets之后进行ROIs，race over和土地增加等数组的function，最后会return一个包含这些信息的dict
-def FindRaceEndConditionsProbabilistic(cur_budget, 
-                                    land_setup, 
-                                    cum_devel_mat, 
-                                    profiles, 
-                                    profile_abundance, 
+
+def FindRaceEndConditionsProbabilistic(cur_budget, #current_budgets
+                                    land_setup, #dataset数据
+                                    cum_devel_mat, #Cumulative_development_matrix
+                                    profiles, #各物种分布信息
+                                    profile_abundance, #各物种总数
                                     cost_el = None, 
                                     restoration_value = 0,
-                                    roi_period = 0):
+                                    roi_period = 0):#循环年份
     
     #roi_period为了R代码保持一致这里使用了R的index方式从1开始，但是python是从0开始，所以在使用roi_period是都使用roi_period - 1
-    number_regions = len(land_setup)
-    number_periods = len(cum_devel_mat)
+    number_regions = len(land_setup)#dataset数据
+    number_periods = len(cum_devel_mat)#Cumulative_development_matrix
     anti_profiles = 1 - profiles
     fixed_mc = cost_el is None
 
@@ -31,20 +32,22 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     
     #cur_budget 是一个50*458矩阵 50行458列
     #Cumulative land bought per current allocation at end of each period
-    cur_spend = np.cumsum(cur_budget.T,axis=0)
+    cur_spend = np.cumsum(cur_budget.T,axis=0)#Cumulative_spend
     #第一步生成50*458的矩阵三个和init相关初始矩阵
     #初始化dataframe里的数据，从数据扩展成矩阵
+    #initial_forested_matrix
     initial_forested_mat = np.array(land_setup['area_forested_init'])#shape是50*458
     initial_forested_mat = initial_forested_mat.reshape((1, initial_forested_mat.size)).repeat(50, axis=0)
-
+    #initial_forestable_matrix
     initial_forestable_mat = np.array(land_setup['area_forestable_init'])#shape是50*458
     initial_forestable_mat = initial_forestable_mat.reshape((1, initial_forestable_mat.size)).repeat(50, axis=0)
-
+    #initial_protected_matrix
     initial_protected_mat = np.array(land_setup['area_reserved_init'])#shape是50*458
     initial_protected_mat = initial_protected_mat.reshape((1, initial_protected_mat.size)).repeat(50, axis=0)
 
     #扩展ce到50*458维的矩阵
     #这里和R语言写的不太一样主要在于，没有对于'ce'的数据类型进行判断
+    #ce_matrix
     ce_mat = np.array(land_setup['ce'])#shape是50*458
     ce_mat = ce_mat.reshape((1,ce_mat.size)).repeat(50,axis=0)
     # calculate hypothetical cumulative *new* area reserved by end of each period if not constrained by bulldozers
@@ -54,15 +57,20 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     else:
         if cost_el != -1:
             ep_oneplusep = cost_el/(1 + cost_el)
+            #reserved_totals
             res_totals = initial_forestable_mat - np.power(np.power((initial_forestable_mat - initial_protected_mat), 1/ep_oneplusep ) - cur_spend/(ce_mat * ep_oneplusep),ep_oneplusep )  - initial_protected_mat#shape是50*458
         else:
             raise Exception("cost elasticity of -1 not implemented")
+        #reserved_totals
         res_totals[np.isnan(res_totals)] = (initial_forestable_mat - initial_protected_mat)[np.isnan(res_totals)]
         res_totals[res_totals < 0] = 0
     
     if number_periods == 1:
+        #reserved_totals
         res_totals = np.array(res_totals).reshape(number_regions, number_periods)
     #剩余森林土地的计算
+    # How much available land is remaining at end of each period given current plan
+    #remaining_forested_land_transpose/remaining_forested_land
     rem_forested_land_trans = np.array(land_setup['forested_area_available_init']) - (res_totals + cum_devel_mat)#shape为458 * 50
     rem_forested_land = rem_forested_land_trans.T
     # Find out when the 'race' is over in each region. Earlier of:
@@ -71,14 +79,19 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     # we use epsilon as a threshold for detecting when land has run out since numerical precision
     # issues may result in failure to detect that event.
     #当剩余土地里袁术数值小于等于EPSILON的index都取出来，再取最小之，如果没有的话就去50（因为50年是最大年限）
+    #conservation_end_periods
     cons_end_periods = []
     for r in range(0,number_regions):
-        #取rem_forested_land中满足条件的元素的index
+        #取remaining_forested_land中满足条件的元素的index
         index = np.where(rem_forested_land[r] <= EPSILON)[0]
         if len(index) > 0:
+            #conservation_end_periods
             cons_end_periods.append(min(index))
         else:
+            #conservation_end_periods
+            #number_periods最大是50，减一是因为python是从0开始的
             cons_end_periods.append(number_periods-1)
+    #conservation_end_periods
     cons_end_periods = np.array(cons_end_periods)
     
     
@@ -90,14 +103,17 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     # feasibility constraints, and add both to the land initially reserved in a region.
     
     # Compute land newly reserved at start of conservation ending period
-    #计算newly_reserved
+    #newly_reserved_conservation_end_period_start
     area_res_consendper_start = []
+    #race_over_periods
     for r,rac_over_per in enumerate(cons_end_periods):
         if rac_over_per > 0:
-            area_newly_res = res_totals[int(rac_over_per) - 1,r]
+            area_newly_res = res_totals[int(rac_over_per) - 1,r]#area_newly_reserve-----reserved_totals
         else:
             area_newly_res = 0
-        area_res_consendper_start.append(np.array(land_setup['area_reserved_init'])[r]+area_newly_res)
+        #newly_reserved_conservation_end_period_start
+        area_res_consendper_start.append(np.array(land_setup['area_reserved_init'])[r]+area_newly_res)#area_newly_reserve
+    #newly_reserved_conservation_end_period_start
     area_res_consendper_start = np.array(area_res_consendper_start)
 
     
@@ -105,19 +121,26 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     # To do so, we'll need to know constraints: how much is available in the final 
     # period during which conservation takes place
     
+    #area_available_consrvation_end_periods
     area_avail_consendper = []
     for r in range(0,number_regions):
+        #consevation_end_periods
         cons_end_per = cons_end_periods[r]
         # find available land at start of period in which race ends.
         #判断race over是什么时间
         if cons_end_per > 0:
+            #area_available_consrvation_end_periods
             area_avail_consendper.append(rem_forested_land[r,int(cons_end_per) - 1])
         else:
+            #area_available_consrvation_end_periods
             area_avail_consendper.append(np.array(land_setup['forested_area_available_init'])[r])
+    #area_available_consrvation_end_periods
     area_avail_consendper = np.array(area_avail_consendper)
 
+    
     area_newly_conserved = []
     for r in range(0,number_regions):
+        #race_over_periods
         rac_over_per = cons_end_periods[r]
         # Need to properly handle case in which race ends in first period
         #当race over发生在peroid
@@ -127,6 +150,7 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
             # In final period, the amount conserved is the minimum of that implied by the budget 
             # and the amount still available. Where the amount implied by the budget is larger, we
             # consider that to be wasted budget rather than an infeasible allocation.
+            #area_available_consrvation_end_periods-----------reserved_totals
             area_conserved_lastper = min(area_avail_consendper[r],res_totals[int(rac_over_per),r] - res_totals[int(rac_over_per) - 1,r])
 
             area_newly_conserved.append(res_totals[int(rac_over_per) - 1,r] + area_conserved_lastper)
@@ -134,6 +158,7 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     area_newly_conserved = np.array(area_newly_conserved)
     # add in land initially conserved
     #把新conserve的土地加在原来的初始值上
+    #reserved_totals_at_conservation_end
     res_totals_at_consend = np.array(land_setup['area_reserved_init']) + area_newly_conserved
 
     
@@ -147,8 +172,10 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     # need to know how much is conserved and how much is restored. 
     #这一部分是为了计算restoration end的时间节点
     if(restoration_value > 0):
+        #area_restored = reserved_totals - area_newly_conserved
         area_restored = res_totals - area_newly_conserved
         area_restored[area_restored < 0] = 0
+        #area_available_for_restoration---------reserved_totals_at_conservation_end
         area_avail_for_rest = np.array(land_setup['area_forestable_init']) - res_totals_at_consend
         area_avail_for_rest = area_avail_for_rest.reshape((1, area_avail_for_rest.size)).repeat(50, axis=0)
         # can't restore more than is available for restoration
@@ -159,20 +186,28 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
         for r in range(0,number_regions):
             # mask = (res_totals_at_consend[r] + area_restored[:,r]) >= (np.array(land_setup['area_forestable_init'])[r] - EPSILON)
             #找出符合条件的index
+            #reserved_totals_at_conservation_end
             index = np.where((res_totals_at_consend[r] + area_restored[:,r]) >= (np.array(land_setup['area_forestable_init'])[r] - EPSILON))
             if len(index[0]) > 0:
+                #restoration_end_periods
                 rest_end_periods.append(min(index[0]))
             else:
                 rest_end_periods.append(number_periods - 1)
+        #restoration_end_periods
         rest_end_periods = np.array(rest_end_periods)
-
+        #restored_totals_at_restoration_end
         rest_totals_at_restend = []
         for r in range(0,number_regions):
+            #restored_end
             rest_end = area_restored[int(rest_end_periods[r]),r]
+            #restored_totals_at_restoration_end
             rest_totals_at_restend.append(rest_end)
+        #restored_totals_at_restoration_end
         rest_totals_at_restend = np.array(rest_totals_at_restend)
     else:
+        #restoration_end_periods = conservation_end_periods
         rest_end_periods = cons_end_periods.copy()
+        #restored_totals_at_restoration_end
         rest_totals_at_restend = np.zeros(number_regions)
         
     
@@ -207,8 +242,10 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     
     #计算ROI的方法，使用到生物的数量'ze'是论文中的z值 z=0.2
     if restoration_value > 0:
+        #probility_protect------restored_totals_at_restoration_end
         p_protect = np.power(((res_totals_at_consend + restoration_value * rest_totals_at_restend)/np.array(land_setup['area_forestable_init'])),np.array(land_setup['ze']))
     else:
+        #probility_protect------restored_totals_at_restoration_end
         p_protect = (res_totals_at_consend/np.array(land_setup['area_forestable_init']))**np.array(land_setup['ze'])
     p_protect[p_protect>1] = 1
 
@@ -216,16 +253,19 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
         # marginal benefits depend upon whether the marginal unit of area affected by the marginal 
         # unit of budget in the specified period is conserved or restored
         # 根据公式计算marg_p_protect，左右没有区别的
+        #marginal_probility_protect--------reserved_totals_at_conservation_end----------restored_totals_at_restoration_end
         marg_p_protect_right = np.array(land_setup['ze'])*np.power((res_totals_at_consend 
                                 + restoration_value * rest_totals_at_restend),(np.array(land_setup['ze']) - 1))/np.power(np.array(land_setup["area_forestable_init"]),np.array(land_setup['ze']))
         marg_p_project_left = np.array(land_setup['ze'])*np.power((res_totals_at_consend 
                                 + restoration_value * rest_totals_at_restend),(np.array(land_setup['ze']) - 1))/np.power(np.array(land_setup["area_forestable_init"]),np.array(land_setup['ze']))
         #调整去向restoration地区的roi，当这个peroid结束时remaing forested——land 没有被protect或者developed应该是roi小于或者等于0的
+        #roi_period_restoration--------remaining_forested_land
         roi_period_rest = rem_forested_land[:,int(roi_period) - 1] < 0
         marg_p_project_left[roi_period_rest] = marg_p_project_left[roi_period_rest] * restoration_value
         roi_period_rest = rem_forested_land[:,int(roi_period) -  1] <= 0
         marg_p_protect_right[roi_period_rest] = marg_p_protect_right[roi_period_rest] * restoration_value
     else:
+        #marginal_probility_protect
         marg_p_protect_right = land_setup['ze']*(res_totals_at_consend**(land_setup['ze'] - 1))/(np.array(land_setup['area_forestable_init'])**land_setup['ze'])
         marg_p_project_left = land_setup['ze']*(res_totals_at_consend**(land_setup['ze'] - 1))/(np.array(land_setup['area_forestable_init'])**land_setup['ze'])
     # And build up terms indicating probability of each species type being unprotected in each ecoregion.
@@ -233,15 +273,18 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     # and the entry representing the probability the species of that type is unprotected
     # in that ecoregion.
     #扩展各种生物的分布与其他的矩阵size匹配，方便后续计算
+    #marginal_probility_protect
     marg_p_terms_left = np.array(profiles) *  marg_p_project_left.reshape((1, marg_p_project_left.size)).repeat(len(profiles), axis=0)
     marg_p_terms_right = np.array(profiles) * marg_p_protect_right.reshape((1, marg_p_protect_right.size)).repeat(len(profiles), axis=0)
     #计算时候可能会出现NAN值，把这些地区的值设成0
+    #marginal_probility_terms
     marg_p_terms_left[np.isnan(marg_p_terms_left)] = 0
     marg_p_terms_right[np.isnan(marg_p_terms_right)] = 0
 
-    #unprotected terms的计算
+    #unprotected_terms的计算
     unprot_terms = []
     for row in np.array(profiles):
+        #specie_probility
         specie_p = 1 - p_protect * row.T
         unprot_terms.append(specie_p)
     unprot_terms = np.array(unprot_terms).T
@@ -250,6 +293,7 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     # we can take full products of unprotected terms across all ecoregions once since that's expensive
     # then in the region-specific loop, we divide by the unprotected term from that focal region to remove its effect.
     # profile_abundance 是表示各个物种的总数
+    #MB_right/left
     mbs_right = []
     for i in range(0,number_regions):
         s_right = np.sum(np.array(profile_abundance)*marg_p_terms_right[:,i]*(fullprods/unprot_terms[i]))
@@ -265,13 +309,13 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     
     
     
-    
     if fixed_mc:
         period_mcs_right = period_mcs = ce_mat[int(roi_period) - 1,]
         period_mcs_left = period_mcs = ce_mat[int(roi_period) - 1,]
     else:
         # Need to calculate total reserved land (accounting for constraints of deforestation and forestable land)
         # in each area for comparison with forestable land, which will give us our MC
+        #roi_period_newly_restoration_totals
         roi_period_newly_res_totals = res_totals[int(roi_period) - 1]
         if restoration_value == 0:
             roi_period_newly_res_totals[cons_end_periods == (int(roi_period) - 1)] = area_newly_conserved[cons_end_periods == int(roi_period) - 1]
@@ -297,22 +341,28 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     
     # give back info about ending conditions, ROI, etc.
     if restoration_value > 0:
+        #restoration_end_periods
         race_end_periods = rest_end_periods.copy()
     else:
+        #consrvation_end_periods
         race_end_periods = cons_end_periods.copy()
     
     
     # Calculate two things about the final period during which 
     # either conservation or restoration takes place. 
     # 1. area reserved or restored at start of that period
+    #area_reserved or restored_race_end_period
     area_resrest_raceendper_start = []
     for r in range(0,number_regions):
         race_over_per = race_end_periods[r]
         if rac_over_per > 0:
+            #area_newly_reserved or restored
             area_newly_resrest = res_totals[int(race_over_per) - 1, r]
         else:
             area_newly_resrest = 0
+        #area_reserved or restored_race_end_period
         area_resrest_raceendper_start.append(np.array(land_setup['area_reserved_init'])[r] + area_newly_resrest)
+    #area_reserved or restored_race_end_period
     area_resrest_raceendper_start = np.array(area_resrest_raceendper_start)
     
     # 2. Area available at the start of that period (end of preceding period).
@@ -321,19 +371,24 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
     # will differ based on whether or not restoration is allowed.
     # - If yes, it's remaining initially forestable land that is not yet conserved.
     # - If no, it's remaining initially forested land that is neither conserved nor developed.
+    #area_available_race_end_periods
     area_avail_raceendper = []
     for r in range(0,number_regions):
         race_end_per = race_end_periods[r]
         if race_end_per > 0:
             if restoration_value > 0:
+                #area_available_race_end_periods
                 area_avail_raceendper.append(np.array(land_setup['forestable_area_available_init'])[r] - res_totals[int(race_end_per)-1,r])
             else:
+                #area_available_race_end_periods
                 area_avail_raceendper.append(rem_forested_land[r,int(race_end_per) - 1])
         else:
             if restoration_value > 0:
+                #area_available_race_end_periods
                 area_avail_raceendper.append(np.array(land_setup['forestable_area_available_init'])[r])
             else:
-                area_avail_raceendper.append(np.array(land_setup['forested_area_available_init'])[r])    
+                area_avail_raceendper.append(np.array(land_setup['forested_area_available_init'])[r])
+    #area_available_race_end_periods    
     area_avail_raceendper = np.array(area_avail_raceendper)
     
     result ={
@@ -375,7 +430,7 @@ def FindRaceEndConditionsProbabilistic(cur_budget,
 # out.file: name of filename to save results to. If null, results simply returned to calling code.
 #主要的计算function，结束后返回一个result的字典
 def SolveBulldozersProbabilistic(land_setup,
-                                        num_periods,
+                                        num_periods,#number_periods
                                         budget_per_period,
                                         profiles, 
                                         profile_abundance,
@@ -396,24 +451,31 @@ def SolveBulldozersProbabilistic(land_setup,
     land_setup['ze'] = np.log(np.array(land_setup['species'])/np.array(land_setup['ae']))/np.log(np.array(land_setup['area_forestable_init']))
     
     #一共458个地区
+    #number_regions
     num_regions = len(land_setup)
     
     # Assemble matrix of cumulative development (if unchecked).
     # This will be derived from either a single fixed rate per ecoregion OR
     # a vector of rates per ecoregion, in which case def.rate is a list (not unlike cost)
+    #cumulative_development_matrix
     cum_devel_mat = np.array(land_setup['def_rate']).reshape((1,len(land_setup['def_rate']))).repeat(num_periods, axis=0)
     cum_devel_mat = np.cumsum(cum_devel_mat,axis=0)
     
     if num_periods == 1:
         cum_devel_mat = np.array(cum_devel_mat).reshape(num_regions, num_periods)
     #总的budget的初始化，当前为根据region数量平均初始化
+    #current_budgets
     cur_budget = (1/num_regions) * (np.array(budget_per_period * np.ones((num_regions,num_periods))))
 
     #定义些条件，在循环内会重新初始化
+    #roi_diffenece
     roi_diff = conv_tol*10
+    #number_pass_adjustments
     num_pass_adjustments = 1
     last_race_over_time = cur_budget.shape[1]
+    #forward_pass
     fwd_pass = 1
+    #total_budget_change
     total_budget_chg = 100000
     
     # 第一层循环：完全分配次数，总调节数额，最大调节步数
@@ -428,8 +490,11 @@ def SolveBulldozersProbabilistic(land_setup,
         t = 1
         # set up copy of budget for convergence checks. We'll look at the difference
         # across the entire time sweep.
+        #number_pass_adjustments
         num_pass_adjustments = 0
+        #total_budget_change
         total_budget_chg = 0
+        
         target_ignore_ctr = np.zeros(len(cur_budget))
         
         while t <= last_race_over_time:
@@ -443,6 +508,7 @@ def SolveBulldozersProbabilistic(land_setup,
             right_budget[:,t - 1] = right_budget[:,t - 1] + budget_nudge
             left_budget[:,t - 1] = np.maximum(left_budget[:,t - 1] - budget_nudge , 0)
             #带入现在的budgets计算ROI和race over等时间参数
+            #race_over_information
             race_over_info = FindRaceEndConditionsProbabilistic(cur_budget,land_setup,cum_devel_mat,profiles,profile_abundance,cost_el,restoration_value,t)
             race_over_info_right = FindRaceEndConditionsProbabilistic(right_budget,land_setup,cum_devel_mat,profiles,profile_abundance,cost_el,restoration_value,t)
             race_over_info_left = FindRaceEndConditionsProbabilistic(left_budget,land_setup,cum_devel_mat,profiles,profile_abundance,cost_el,restoration_value,t)
@@ -458,7 +524,7 @@ def SolveBulldozersProbabilistic(land_setup,
             period_ces = np.array(land_setup['ce']).copy()
             
 
-            
+            #cost_of_remaning_land
             if fixed_mc:
                 cost_of_rem_land = race_over_info['area_avail_raceendper'] * period_ces
             else:
@@ -466,7 +532,8 @@ def SolveBulldozersProbabilistic(land_setup,
                     ep_oneplusep = cost_el/(1+cost_el)
                     if restoration_value > 0:
                         #计算剩余土地的cost，isoelastic cost
-                        cost_of_rem_land = ep_oneplusep * period_ces*((np.array(land_setup['area_forestable_init']) - race_over_info['area_resrest_raceendper_start']) ** (1/ep_oneplusep))
+                        #cost_of_remaning_land
+                        cost_of_rem_land = ep_oneplusep * period_ces*((np.array(land_setup['area_forestable_init']) - np.around(race_over_info['area_resrest_raceendper_start']),6) ** (1/ep_oneplusep))
                     else:
                         cost_of_rem_land = ep_oneplusep * period_ces*(np.array(land_setup['area_forestable_init'])
                                                                       - race_over_info['area_resrest_raceendper_start']) ** (1/ep_oneplusep) - (np.array(land_setup['area_forestable_init']) - race_over_info['area_resrest_raceendper_start'] + race_over_info['area_avail_raceendper'])**(1/ep_oneplusep)
@@ -495,6 +562,7 @@ def SolveBulldozersProbabilistic(land_setup,
             # Identify source region. Use left ROIs, and only consider regions that
             # have budget to give.
             #获得左侧ROI（source），min寻找最小
+            #temp_roi
             roi_feas_left = rois_left.copy()
             roi_feas_left[period_budgets == 0] = np.nan
             source_region = np.nanargmin(roi_feas_left,axis=0)
@@ -520,6 +588,7 @@ def SolveBulldozersProbabilistic(land_setup,
                 num_pass_adjustments = num_pass_adjustments + 1
 
                 print("Finding reallocation for {}->{}: {}, {}".format(source_region, target_region, source_roi, target_roi))
+                #reallocation_amount
                 realloc_amt = cur_budget[source_region,t - 1]
                 #当超剩余土地话费大于现阶段budgets是，且超过值小于budgets是，使当前重新分配值为超过值
                 if excess_budget[target_region] < 0 and -excess_budget[target_region] < realloc_amt:
@@ -527,6 +596,7 @@ def SolveBulldozersProbabilistic(land_setup,
                 
                 #初始三个分配值等于重新分配总值
                 last_realloc_delta = realloc_amt
+                #initial_reallocation_amount
                 init_realloc_amt =  realloc_amt
                 smallest_flip_realloc = realloc_amt
 
@@ -671,18 +741,19 @@ def main():
 
 
     # Baseline fixed parameters
-    kNumPeriods = 50
-    kBudgetPerPeriod = 1E9
-    kSARExponent = 0.2
+    
+    kNumPeriods = 50 #number of total periods
+    kBudgetPerPeriod = 1E9 #peroid budgets
+    kSARExponent = 0.2 #
     kCostType = "GDPperm2_partial"
     kDefSource = "hansen2018gross"
     kDefType = "dozer_rate_2000_2018"
     kFAType = "forest_area_2018"
     kPFAType = "protected_forest_area_2018"
-    kCostEl = -6
+    kCostEl = -6 #cost_el
     # Endemic profiles with restoration value at 80% of pristine forest
     # (see Newbold et al. 2015); 
-    kRestMultiplier = 0.8 
+    kRestMultiplier = 0.8 #restoration_value
 
     # Budget increment for heuristic solutions
     kBudgetIncr = 100000

@@ -34,18 +34,18 @@ NIGNOREITER = 10
 #   how many species of that type we think there are.
 
 
-FindRaceEndConditionsProbabilistic = function(cur.budget, 
+FindRaceEndConditionsProbabilistic = function(cur.budget#current_budget, 
                                               land.setup, 
-                                              cum.devel.mat, 
-                                              profiles, 
-                                              profile.abundance, 
+                                              cum.devel.mat, #Cumulative_development_matrix
+                                              profiles, #各物种分布信息
+                                              profile.abundance, #各物种总数
                                               cost.el=NA, 
                                               restoration.value=0, 
-                                              roi.period) {
-  num.regions = nrow(land.setup)
-  num.periods = nrow(cum.devel.mat)
+                                              roi.period) {#循环年份
+  num.regions = nrow(land.setup)#number_regions dataset数据
+  num.periods = nrow(cum.devel.mat)#number_periods
   anti.profiles = 1 - profiles
-  fixed.mc = is.na(cost.el)
+  fixed.mc = is.na(cost.el) #MC is a function of forestable land that is not yet protected via either conservation or reforestation
   
   
   
@@ -56,11 +56,13 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     
     # Cumulative land bought per current allocation at end of each period
     # - calculate cumulative spend as of period t, then compute land purchased using that vector
+    #calculate cumulative
     cum.spend = apply(cur.budget, 1, cumsum)
     initial.forested.mat = matrix(area.forested.init, ncol=num.regions, nrow=num.periods, byrow=T)
     initial.forestable.mat = matrix(area.forestable.init, ncol=num.regions, nrow=num.periods, byrow=T)
     initial.protected.mat = matrix(area.reserved.init, ncol=num.regions, nrow=num.periods, byrow=T)
     if(class(ce)=="list") {
+      #ce_matrix
       ce.mat = matrix(unlist(ce), ncol=num.regions, nrow=num.periods, byrow=F)
     } else {
       ce.mat = matrix(ce, ncol=num.regions, nrow=num.periods, byrow=T)
@@ -69,6 +71,7 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     # calculate hypothetical cumulative *new* area reserved by end of each period
     # if not constrained by bulldozers
     if(fixed.mc) {
+      #reserved_totals
       res.totals =  apply(cur.budget/t(ce.mat), 1, cumsum) 
     } else {
       if(cost.el!=-1) {
@@ -99,6 +102,7 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     if(num.periods==1) {
       res.totals = matrix(res.totals, ncol=num.regions, nrow=num.periods)
     }
+    #remaining_forested_land
     rem.forested.land = forested.area.available.init - t(res.totals + cum.devel.mat) # How much available land is remaining at end of each period given current plan
     
     # Find out when the 'race' is over in each region. Earlier of:
@@ -107,6 +111,7 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     # we use epsilon as a threshold for detecting when land has run out since numerical precision
     # issues may result in failure to detect that event.
     meeting.periods = apply(rem.forested.land, 1, FUN=function(rem.vec) { min(which(rem.vec<=EPSILON)) })
+    #conservation_end_periods
     cons.end.periods = pmin(meeting.periods, num.periods)
     
     # Next, we want land conserved in each region when the 'race' is over in each region.
@@ -115,7 +120,8 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     # that period, calculate how much is conserved in the 'race over' period subject to 
     # feasibility constraints, and add both to the land initially reserved in a region.
     
-    # Compute land newly reserved at start of conservation ending period 
+    # Compute land newly reserved at start of conservation ending period
+    #area_reserved_conservation_end_period
     area.res.consendper.start = sapply(1:num.regions, function(r) {
       # find available land at start of period in which race ends.
       race.over.per = cons.end.periods[r]
@@ -124,40 +130,49 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
       } else {
         area.newly.res = 0
       }
+      #area_newly_reserve
       return(area.reserved.init[r]+area.newly.res)
     })
         
     # Now find actual land conserved during final conservation period in each region.
     # To do so, we'll need to know constraints: how much is available in the final 
     # period during which conservation takes place
+    #area_available_conservation_end_periods
     area.avail.consendper = sapply(1:num.regions, function(r) {
       # find available land at start of period in which race ends.
       cons.end.per = cons.end.periods[r]
       if(cons.end.per > 1) {
+        #area_available_conservation_end_periods
         area.avail.consendper = rem.forested.land[r, cons.end.per-1]
       } else {
+        #area_available_conservation_end_periods
         area.avail.consendper = forested.area.available.init[r]
       }
       return(area.avail.consendper)
     })
+    #area_newly_conserved
     area.newly.conserved = 
       sapply(1:num.regions, function(r) {  # land added during race
         
         # find available land at start of period in which race ends.
+        #race_over_periods
         race.over.per = cons.end.periods[r]
         
 
         # Need to properly handle case in which race ends in first period
         if(race.over.per==1) {
+          #area_available_conservation_end_periods
           return(min(area.avail.consendper[r], res.totals[race.over.per,r]))
         } else {
           # In final period, the amount conserved is the minimum of that implied by the budget 
           # and the amount still available. Where the amount implied by the budget is larger, we
           # consider that to be wasted budget rather than an infeasible allocation.
+          #area_consrved_last_periods
           area.conserved.lastper = min(area.avail.consendper[r], res.totals[race.over.per,r]-res.totals[race.over.per-1,r])
           return(res.totals[race.over.per-1,r] + area.conserved.lastper)
         }
       })
+    #reserved_totals_at_conserved_periods
     res.totals.at.consend = area.reserved.init + area.newly.conserved # add in land initially conserved
     # If restoration is allowed, we need to know conditions for when the restoration phase ends.
     # It will be the earlier of 
@@ -173,6 +188,7 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
       # for restoration, there is no development to consider, so we only need to constrain
       # restoration totals by the total amount of forested land initially available
       # (the sum of conservation and restoration can't exceed initially forested land)
+      #area_available_for_restoration
       area.avail.for.rest = matrix(area.forestable.init - res.totals.at.consend,
                                    ncol=num.regions,
                                    nrow=num.periods, 
@@ -194,10 +210,11 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
       # sapply call above will be Inf for that region.
       # In that case, the 'end' period for restoration is the end of the planning horizon,
       # and pmin will do the trick.
-      # 
+      #restoration_end_periods
       rest.end.periods = pmin(rest.end.periods, num.periods)
       
       # Find out ending area restored per region
+      #restored_totals_at_restoration_end_periods
       rest.totals.at.restend = sapply(1:num.regions, FUN=function(r) {
         rest.end = area.restored[rest.end.periods[r],r]
       })
@@ -240,16 +257,19 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     # If a candidate budget allocation would result in more than the initially
     # foreseted area being protected, we cap the probability at one.
     if(restoration.value > 0) {
+      #probability_protection-----reserved_totals_at_conserved_periods-------restored_totals_at_restoration_end_periods
       p.protect = ((res.totals.at.consend + restoration.value*rest.totals.at.restend)/area.forestable.init)^ze
     } else {
       p.protect = (res.totals.at.consend/area.forestable.init)^ze
     }
+    #probability_protection
     p.protect[p.protect>1]=1
     
     
     if(restoration.value > 0) {
       # marginal benefits depend upon whether the marginal unit of area affected by the marginal 
       # unit of budget in the specified period is conserved or restored
+      #marginal_probility_protect
       marg.p.protect.right = marg.p.protect.left = ze*((res.totals.at.consend + restoration.value * rest.totals.at.restend)^(ze-1))/(area.forestable.init^ze)
       # Need to adjust marginal probability of protection if the marginal dollar would 
       # go toward restoration. That happens if, by the end of the roi period of interest,
@@ -267,6 +287,7 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     # this will be a matrix with a column per species type, a row per ecoregion,
     # and the entry representing the probability the species of that type is unprotected
     # in that ecoregion.
+    #marginal_probility_terms
     marg.p.terms.left = profiles * matrix(marg.p.protect.left, ncol=nrow(land.setup), nrow=length(profile.abundance), byrow=T)
     marg.p.terms.right = profiles * matrix(marg.p.protect.right, ncol=nrow(land.setup), nrow=length(profile.abundance), byrow=T)
     # We could get an NaN if a profile entry is zero for a region and the marginal probability of protection is Infinite
@@ -275,7 +296,7 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     # influenced by protection in that region.
     marg.p.terms.right[is.nan(marg.p.terms.right)] = 0
     marg.p.terms.left[is.nan(marg.p.terms.left)] = 0
-    
+    #unprotect_terms
     unprot.terms = apply(profiles, 1, function(sp.type.pa.vec) { (1-p.protect*sp.type.pa.vec)})
 
     # now for each ecoregion x species type, we want the probability that
@@ -284,7 +305,9 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     
     # we can take full products of unprotected terms across all ecoregions once since that's expensive
     # then in the region-specific loop, we divide by the unprotected term from that focal region to remove its effect.
+    #full products of unprotected terms
     fullprods = colprods(unprot.terms)
+    #MB_right/left
     mbs.right = sapply(1:num.regions, function(i) {
       sum(profile.abundance*marg.p.terms.right[,i]*(fullprods/unprot.terms[i,]))
     })
@@ -332,8 +355,10 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     
     # give back info about ending conditions, ROI, etc.
     if(restoration.value > 0) {
+      #restoration_end_periods
       race.end.periods = rest.end.periods
     } else {
+      #consrvation_end_periods
       race.end.periods = cons.end.periods
     }
     
@@ -341,10 +366,12 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     # Calculate two things about the final period during which 
     # either conservation or restoration takes place. 
     # 1. area reserved or restored at start of that period
+    #area_reserved or restored_race_end_period
     area.resrest.raceendper.start = sapply(1:num.regions, function(r) {
       # find available land at start of period in which race ends.
       race.over.per = race.end.periods[r]
       if(race.over.per > 1) {
+        #area_newly_reserved or restored
         area.newly.resrest = res.totals[race.over.per-1, r]
       } else {
         area.newly.resrest = 0
@@ -358,6 +385,7 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
     # will differ based on whether or not restoration is allowed.
     # - If yes, it's remaining initially forestable land that is not yet conserved.
     # - If no, it's remaining initially forested land that is neither conserved nor developed.
+    #area_available_race_end_periods
     area.avail.raceendper = sapply(1:num.regions, function(r) {
       # find available land at start of period in which race ends.
       race.end.per = race.end.periods[r]
@@ -369,6 +397,7 @@ FindRaceEndConditionsProbabilistic = function(cur.budget,
         }
       } else {
         if(restoration.value > 0) {
+          #area_available_race_end_periods
           area.avail.raceendper = forestable.area.available.init[r]
         } else {
           area.avail.raceendper = forested.area.available.init[r]
@@ -434,6 +463,7 @@ SolveBulldozersProbabilistic =  function(land.setup,
   fixed.mc = is.na(cost.el)
   land.setup[,forestable.area.available.init:= area.forestable.init-area.reserved.init] # Initially Available Area  
   land.setup[,forested.area.available.init:= area.forested.init-area.reserved.init] # Initially Available Area
+  #ze表示论文中公式使用的z=0.2
   land.setup[,ze:=log(species/ae)/log(area.forestable.init)] # species area curve exponent
   
   #这一段在后面没有用到，在python代码里没有写
@@ -450,10 +480,12 @@ SolveBulldozersProbabilistic =  function(land.setup,
   # a vector of rates per ecoregion, in which case def.rate is a list (not unlike cost)
   #这个判断不知道有什么意思，因为后面没有对ce进行过操作，一致都是一维数组
   if(class(def.rate)=="list") {
+    #cumulative_development_matrix
     cum.devel.mat = apply(matrix(unlist(def.rate), nrow=num.regions, ncol=num.periods, byrow=TRUE),
                           1,
                           cumsum)
   } else {
+    #cumulative_development_matrix
     cum.devel.mat = apply(matrix(def.rate, nrow=num.regions, ncol=num.periods, byrow=FALSE), 
                           1, 
                           cumsum)
@@ -461,6 +493,7 @@ SolveBulldozersProbabilistic =  function(land.setup,
   # convert to matrix for special case of 1 period problem since otherwise gets 
   # retyped as numeric            
   if(num.periods == 1) {
+    #cumulative_development_matrix
     cum.devel.mat = matrix(cum.devel.mat, nrow=num.periods, ncol=num.regions)
   }
 
@@ -472,6 +505,7 @@ SolveBulldozersProbabilistic =  function(land.setup,
   
   # Initial allocation equal across regions in each period
   #初始化budgets，平均分配
+  #current_budget
   cur.budget = c(1/num.regions) * matrix(budget.per.period, nrow = num.regions, ncol=num.periods, byrow=T) #Set initial proportion of budget allocation
   
   # Iniitalize other numerical tracking variables
@@ -480,6 +514,7 @@ SolveBulldozersProbabilistic =  function(land.setup,
   num.pass.adjustments = 1
   last.race.over.time = ncol(cur.budget)
   fwd.pass = 1
+  #total_budget_change
   total.budget.chg = 100000
   # Loop until we've   at a solution. 
   # Start with the initial budget guess, then repeatedly
@@ -551,6 +586,7 @@ SolveBulldozersProbabilistic =  function(land.setup,
       #   we need to know starting and ending conservation in that period, not just the difference
       # - subtract from actual budget
       if(fixed.mc) {
+        #cost_of_remaning_land
         cost.of.rem.land = race.over.info$area.avail.raceendper*period.ces
       } else {
         # isoelastic cost. Note that if we allow restoration, the cost of available land
@@ -607,6 +643,7 @@ SolveBulldozersProbabilistic =  function(land.setup,
         num.pass.adjustments = num.pass.adjustments + 1
         print(paste0("Finding reallocation for ", source, "->", target, ": ", source.roi, ", ",target.roi))
         # start by considering reallocating ALL of source regions budget.
+        #reallocation_amount
         realloc.amt = cur.budget[source, t]
         
         
@@ -623,7 +660,7 @@ SolveBulldozersProbabilistic =  function(land.setup,
         
         while(T) {
 
-          #小河里的更改实验的budgets有些奇怪，因为已经子啊循环开始初始化了
+          #这里的更改trial_budgets有些奇怪，因为已经子啊循环开始初始化了
           trial.budget = cur.budget
           trial.budget[source, t] = cur.budget[source, t] - realloc.amt
           trial.budget[target, t] = cur.budget[target, t] + realloc.amt
